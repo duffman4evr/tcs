@@ -1,25 +1,40 @@
 import React from 'react';
-import logo from './logo.svg';
-import './App.css';
+import styled from '@emotion/styled'
+import {InputArray} from "./InputArray";
+import {OutputView} from "./OutputView";
+import { Segment } from 'semantic-ui-react'
+import {SimulationFinishedEvent} from "./simulator";
+
+const leftSegment = {
+    marginRight: '0.5rem',
+    marginLeft: '0px',
+    marginTop: '0px',
+    marginBottom: '0px',
+};
+
+const rightSegment = {
+    margin: '0px'
+};
+
+const MainDiv = styled.div`
+  margin: 1rem;
+  display: flex;
+`
+
+export interface EventBus {
+  notifySimulationFinished: SimulationFinishedEvent
+}
+
+const eventBus: EventBus = {
+  notifySimulationFinished: results => { console.log("THIS SHOULD NOT HAPPEN") }
+}
 
 function App() {
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.tsx</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
-    </div>
+    <MainDiv>
+      <Segment style={leftSegment}><InputArray eventBus={eventBus}/></Segment>
+      <Segment style={rightSegment}><OutputView eventBus={eventBus}/></Segment>
+    </MainDiv>
   );
 }
 
