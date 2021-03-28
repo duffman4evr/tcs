@@ -14,7 +14,9 @@ enum EventType {
 
 enum AbilityType {
     LIGHTNING_BOLT,
-    CHAIN_LIGHTNING
+    CHAIN_LIGHTNING,
+    LO_LIGHTNING_BOLT,
+    LO_CHAIN_LIGHTNING
 }
 
 interface Event {
@@ -48,17 +50,23 @@ const CAST_TIME_MAP: NumberToNumberMap = {
 
 const BASE_DAMAGE_MAP: NumberToNumberMap = {
     [AbilityType.LIGHTNING_BOLT]: 563,
-    [AbilityType.CHAIN_LIGHTNING]: 734
+    [AbilityType.CHAIN_LIGHTNING]: 734,
+    [AbilityType.LO_LIGHTNING_BOLT]: 563,
+    [AbilityType.LO_CHAIN_LIGHTNING]: 734
 }
 
 const DAMAGE_RANGE_MAP: NumberToNumberMap = {
     [AbilityType.LIGHTNING_BOLT]: 81,
-    [AbilityType.CHAIN_LIGHTNING]: 105
+    [AbilityType.CHAIN_LIGHTNING]: 105,
+    [AbilityType.LO_LIGHTNING_BOLT]: 81,
+    [AbilityType.LO_CHAIN_LIGHTNING]: 105
 }
 
 const COEFFICIENT_MAP: NumberToNumberMap = {
     [AbilityType.LIGHTNING_BOLT]: 0.797,
-    [AbilityType.CHAIN_LIGHTNING]: 0.643
+    [AbilityType.CHAIN_LIGHTNING]: 0.643,
+    [AbilityType.LO_LIGHTNING_BOLT]: 0.797,
+    [AbilityType.LO_CHAIN_LIGHTNING]: 0.643
 }
 
 const MANA_COST_MAP: NumberToNumberMap = {
@@ -68,7 +76,21 @@ const MANA_COST_MAP: NumberToNumberMap = {
 
 const FLIGHT_TIME_SPELLS: NumberToBooleanMap = {
     [AbilityType.LIGHTNING_BOLT]: true,
-    [AbilityType.CHAIN_LIGHTNING]: false
+    [AbilityType.CHAIN_LIGHTNING]: false,
+    [AbilityType.LO_LIGHTNING_BOLT]: true,
+    [AbilityType.LO_CHAIN_LIGHTNING]: false
+}
+
+const LIGHTNING_OVERLOAD_MAP: NumberToNumberMap = {
+    [AbilityType.LIGHTNING_BOLT]: AbilityType.LO_LIGHTNING_BOLT,
+    [AbilityType.CHAIN_LIGHTNING]: AbilityType.LO_CHAIN_LIGHTNING,
+}
+
+const IS_LO_SPELL: NumberToBooleanMap = {
+    [AbilityType.LIGHTNING_BOLT]: false,
+    [AbilityType.CHAIN_LIGHTNING]: false,
+    [AbilityType.LO_LIGHTNING_BOLT]: true,
+    [AbilityType.LO_CHAIN_LIGHTNING]: true
 }
 
 const eventComparator: Comparator<Event> = (a: Event, b: Event) => {
@@ -113,6 +135,7 @@ export enum SpecType {
 export enum Talent {
     ELEMENTAL_FOCUS,
     CONVECTION,
+    CONCUSSION,
 }
 
 export enum MetaGem {
@@ -169,14 +192,17 @@ export interface SingleSimulationResult {
 
 export interface MultiSimulationResult {
     averageDps: number;
+    averageDpsPerSimulation: number[];
     averageTimeToOom?: number;
     neverOomRatio: number;
 }
 
 export interface SimulationResults {
     averageDps: number;
+    averageDpsPerSimulation: number[];
     averageTimeToOom?: number;
     neverOomRatio: number;
+    dpsPerEp: number;
     spellpowerEp: number;
     spellCritRatingEp: number;
     spellHasteRatingEp: number;
@@ -187,6 +213,10 @@ export interface SimulationResults {
 
 export interface SimulationFinishedEvent {
     (results: SimulationResults): void
+}
+
+export interface SimulationStartedEvent {
+    (input: SimulationInput): void
 }
 
 export function simulate(input: SimulationInput) : SimulationResults {
@@ -243,8 +273,10 @@ export function simulate(input: SimulationInput) : SimulationResults {
     if (input.trace) {
         return {
             averageDps: averageDps,
+            averageDpsPerSimulation: [averageDps],
             averageTimeToOom: results.averageTimeToOom,
             neverOomRatio: results.neverOomRatio,
+            dpsPerEp: 0,
             spellpowerEp: 1,
             spellCritRatingEp: 0,
             spellHasteRatingEp: 0,
@@ -270,9 +302,11 @@ export function simulate(input: SimulationInput) : SimulationResults {
 
     return {
         averageDps: averageDps,
+        averageDpsPerSimulation: results.averageDpsPerSimulation,
         averageTimeToOom: results.averageTimeToOom,
         neverOomRatio: results.neverOomRatio,
         spellpowerEp: 1,
+        dpsPerEp: dpsPerEquivalencePoint,
         spellCritRatingEp: epPerSpellCritRating,
         spellHasteRatingEp: epPerSpellHasteRating,
         spellHitRatingEp: hitIsCapped ? 0 : epPerSpellHitRating,
@@ -303,6 +337,7 @@ function simulateManyFights(input: SimulationInput): MultiSimulationResult {
 
     return {
         averageDps: averageDps,
+        averageDpsPerSimulation: dpsAverages,
         averageTimeToOom: averageTimeToOom,
         neverOomRatio: neverOomRatio,
     }
@@ -506,6 +541,22 @@ function simulateSingleFight(input: SimulationInput): SingleSimulationResult {
 
                 logIfTrace(input, () => `[${event.time}] ${AbilityType[event.ability!]} arrived at boss. Gamestate is ${JSON.stringify(gameState)}`)
 
+                const lightningOverloadProc = Math.random() < 0.2;
+
+                if (lightningOverloadProc) {
+                    const loAbility = LIGHTNING_OVERLOAD_MAP[event.ability];
+                    if (loAbility !== undefined) {
+                        logIfTrace(input, () => `Lightning Overload proc'd for ${AbilityType[event.ability!]}.`);
+                        const flightTime = FLIGHT_TIME_SPELLS[loAbility] ? input.flightTime : 0;
+                        const loArriveEvent: Event = {
+                            time: event.time + flightTime,
+                            type: EventType.ARRIVE,
+                            ability: loAbility,
+                        };
+                        queue.push(loArriveEvent);
+                    }
+                }
+
                 // Roll hit
                 const hitPercent = 83 + Math.min((input.spellHitRating / SPELL_HIT_RATING_PER_PERCENT), 16);
                 const isHit = Math.random() < (hitPercent / 100);
@@ -530,19 +581,24 @@ function simulateSingleFight(input: SimulationInput): SingleSimulationResult {
                     logIfTrace(input, () => `Elemental focus stacks reset due to crit. Gamestate is ${JSON.stringify(gameState)}`);
                 }
 
+                // Figure out if we are dealing with a lightning overload spell.
+                const lightningOverloadMultiplier = IS_LO_SPELL[event.ability] ? 0.5 : 1;
+
                 // Roll damage
                 const baseDamage = BASE_DAMAGE_MAP[event.ability];
-                const damageRoll = Math.floor(Math.random() * (DAMAGE_RANGE_MAP[event.ability] + 1));
+                const damageRoll = Math.random() * (DAMAGE_RANGE_MAP[event.ability] + 1);
                 const rawBonusDamage = input.spellpower + ((input.totem === Totem.TOTEM_OF_THE_VOID) ? 55 : 0);
-                const bonusDamage = Math.floor(COEFFICIENT_MAP[event.ability] * rawBonusDamage);
-                const damage = (baseDamage + damageRoll + bonusDamage) * critMultiplier
+                const coefficient = COEFFICIENT_MAP[event.ability] + (0.01 * input.specInfo.talents[Talent.CONCUSSION]);
+                const bonusDamage = coefficient * rawBonusDamage;
+                const damage = (baseDamage + damageRoll + bonusDamage) * critMultiplier * lightningOverloadMultiplier;
+                const flooredDamage = Math.floor(damage)
 
-                logIfTrace(input, () => `${damage} damage was done.`);
+                logIfTrace(input, () => `${flooredDamage} damage was done.`);
 
                 const isFightOver = event.time > jitteredFightDuration;
 
                 if (!isFightOver) {
-                    totalDamageDone += damage;
+                    totalDamageDone += flooredDamage;
                 } else {
                     logIfTrace(input, () => `The damage was not added to the total since the fight is over.`);
                 }
