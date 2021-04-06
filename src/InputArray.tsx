@@ -1,7 +1,17 @@
 import React from "react";
 import styled from "@emotion/styled";
 import {Button, Dropdown, Form, Icon, Popup} from "semantic-ui-react";
-import {MetaGem, PotionStrategy, Rotation, simulate, SimulationInput, SpecType, Talent, Totem} from "./simulator";
+import {
+    BloodlustStrategy,
+    MetaGem,
+    PotionStrategy,
+    Rotation,
+    simulate,
+    SimulationInput,
+    SpecType,
+    Talent,
+    Totem
+} from "./simulator";
 import {EventBus} from "./App";
 
 const SimulateButtonContainer = styled.div`
@@ -21,6 +31,7 @@ const INPUT_ID_ROTATION = 'rotation';
 const INPUT_ID_POTION_STRATEGY = 'potionStrategy';
 const INPUT_ID_TOTEM = 'totem';
 const INPUT_ID_META_GEM = 'metaGem';
+const INPUT_ID_BLOODLUST = 'bloodlust';
 
 export interface InputArrayProps {
     eventBus: EventBus;
@@ -146,14 +157,23 @@ export class InputArray extends React.Component<InputArrayProps, InputArrayState
                     </select>
                 </Form.Field>
             </Form.Group>
-            <Form.Field>
-                <label>Potion Strategy</label>
-                <select id={INPUT_ID_POTION_STRATEGY}>
-                    <option value={PotionStrategy.NONE} selected>No potions</option>
-                    <option value={PotionStrategy.MANA}>Mana Potion on CD</option>
-                    <option value={PotionStrategy.HASTE}>Haste Potion on CD</option>
-                </select>
-            </Form.Field>
+            <Form.Group widths='equal'>
+                <Form.Field>
+                    <label>Potion Strategy</label>
+                    <select id={INPUT_ID_POTION_STRATEGY}>
+                        <option value={PotionStrategy.NONE} selected>No potions</option>
+                        <option value={PotionStrategy.MANA}>Mana Potion on CD</option>
+                        <option value={PotionStrategy.DESTRUCTION}>Destruction Potion on CD</option>
+                    </select>
+                </Form.Field>
+                <Form.Field>
+                    <label>Bloodlust</label>
+                    <select id={INPUT_ID_BLOODLUST}>
+                        <option value={BloodlustStrategy.NONE} selected>No Bloodlust</option>
+                        <option value={BloodlustStrategy.AT_FIGHT_START_AND_ON_CD}>Bloodlust at fight start and on CD</option>
+                    </select>
+                </Form.Field>
+            </Form.Group>
 
             <Button primary onClick={() => this.readInputAndSimulate()}>Simulate!</Button>
         </Form>
@@ -176,7 +196,7 @@ export class InputArray extends React.Component<InputArrayProps, InputArrayState
             spellHasteRating: this.getIntegerField(INPUT_ID_SPELL_HASTE_RATING),
             spellHitRating: this.getIntegerField(INPUT_ID_SPELL_HIT_RATING),
             manaPerFive: this.getIntegerField(INPUT_ID_MP5),
-            bloodlustOnCooldown: true,
+            bloodlustStrategy: this.getIntegerField(INPUT_ID_BLOODLUST),
             metaGem: this.getIntegerField(INPUT_ID_META_GEM),
             totem: this.getIntegerField(INPUT_ID_TOTEM),
             potionStrategy: this.getIntegerField(INPUT_ID_POTION_STRATEGY),

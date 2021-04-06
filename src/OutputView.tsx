@@ -121,7 +121,7 @@ export class OutputView extends React.Component<OutputViewProps, OutputViewState
                         <Statistic.Label>Intellect&nbsp;
                             <Popup
                                 trigger={<Icon circular style={textTop} size='tiny' name='info' />}
-                                content='Intellect EP is simply based on spell crit EP, since intellect gives a small amount of spell crit. This SIM assumes ~30 intellect grants 1% spell crit.'
+                                content='Intellect EP is simply based on spell crit EP, since intellect gives a small amount of spell crit. This SIM assumes ~80 intellect grants 1% spell crit.'
                                 size='small'
                             />
                         </Statistic.Label>
@@ -150,7 +150,7 @@ export class OutputView extends React.Component<OutputViewProps, OutputViewState
                     simulationInput: undefined,
                     simulationResults: results,
                 })
-            }, 0, carePackage);
+            }, 20, carePackage);
         }
     }
 

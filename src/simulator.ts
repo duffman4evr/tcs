@@ -7,6 +7,8 @@ enum EventType {
     MP5,
     HASTE_POTION_START,
     HASTE_POTION_END,
+    DESTRUCTION_POTION_START,
+    DESTRUCTION_POTION_END,
     MANA_POTION,
     BLOODLUST_START,
     BLOODLUST_END
@@ -23,6 +25,7 @@ interface Event {
     time: number,
     type: EventType,
     ability?: AbilityType
+    castSnapshot?: CastSnapshot
 }
 
 interface GameState {
@@ -33,6 +36,7 @@ interface GameState {
     chainLightningCooldownComplete: number;
     bloodlustActive: boolean;
     hastePotionActive: boolean;
+    destructionPotionActive: boolean;
 }
 
 type NumberToNumberMap = {
@@ -71,7 +75,9 @@ const COEFFICIENT_MAP: NumberToNumberMap = {
 
 const MANA_COST_MAP: NumberToNumberMap = {
     [AbilityType.LIGHTNING_BOLT]: 300,
-    [AbilityType.CHAIN_LIGHTNING]: 760
+    [AbilityType.CHAIN_LIGHTNING]: 760,
+    [AbilityType.LO_LIGHTNING_BOLT]: 0,
+    [AbilityType.LO_CHAIN_LIGHTNING]: 0,
 }
 
 const FLIGHT_TIME_SPELLS: NumberToBooleanMap = {
@@ -115,6 +121,9 @@ const FIGHT_DURATION_HARD_CAP = 20*60*1000;
 const SUPER_MANA_POTION_BASE = 1800;
 const SUPER_MANA_POTION_RANGE = 1200;
 
+// Given EP value of 1 crit rating, multiply by this to get EP value of int.
+const INT_TO_CRIT_RATING_EP_RATIO = 0.27625
+
 const EVENT_TYPE_TO_PRIORITY_MAP: NumberToNumberMap = {
     [EventType.START_CAST]: 1000,
     [EventType.END_CAST]: 900,
@@ -122,6 +131,8 @@ const EVENT_TYPE_TO_PRIORITY_MAP: NumberToNumberMap = {
     [EventType.MANA_POTION]: 101,
     [EventType.HASTE_POTION_START]: 101,
     [EventType.HASTE_POTION_END]: 101,
+    [EventType.DESTRUCTION_POTION_START]: 101,
+    [EventType.DESTRUCTION_POTION_END]: 101,
     [EventType.MP5]: 100,
     [EventType.BLOODLUST_START]: 99,
     [EventType.BLOODLUST_END]: 99,
@@ -157,8 +168,13 @@ export enum Rotation {
 
 export enum PotionStrategy {
     MANA,
-    HASTE,
+    DESTRUCTION,
     NONE,
+}
+
+export enum BloodlustStrategy {
+    NONE,
+    AT_FIGHT_START_AND_ON_CD,
 }
 
 export interface SpecInfo {
@@ -179,7 +195,7 @@ export interface SimulationInput {
     spellHitRating: number;
     manaPerFive: number;
     metaGem: MetaGem;
-    bloodlustOnCooldown: boolean;
+    bloodlustStrategy: BloodlustStrategy;
     totem: Totem;
     potionStrategy: PotionStrategy;
     specInfo: SpecInfo;
@@ -209,6 +225,12 @@ export interface SimulationResults {
     spellHitRatingEp: number;
     intellectEp: number;
     timeTakenToSimulate: number;
+}
+
+export interface CastSnapshot {
+    isHit: boolean;
+    isCrit: boolean;
+    damage: number;
 }
 
 export interface SimulationFinishedEvent {
@@ -310,7 +332,7 @@ export function simulate(input: SimulationInput) : SimulationResults {
         spellCritRatingEp: epPerSpellCritRating,
         spellHasteRatingEp: epPerSpellHasteRating,
         spellHitRatingEp: hitIsCapped ? 0 : epPerSpellHitRating,
-        intellectEp: epPerSpellCritRating * 0.53772,
+        intellectEp: epPerSpellCritRating * INT_TO_CRIT_RATING_EP_RATIO,
         timeTakenToSimulate: Date.now() - startTime
     };
 }
@@ -354,6 +376,7 @@ function simulateSingleFight(input: SimulationInput): SingleSimulationResult {
         potionCooldownComplete: 0,
         bloodlustActive: false,
         hastePotionActive: false,
+        destructionPotionActive: false,
     }
 
     queue.push({
@@ -382,7 +405,7 @@ function simulateSingleFight(input: SimulationInput): SingleSimulationResult {
 
     while (queue.length > 0) {
 
-    //for (let i = 0; i < 100; i++) {
+    //for (let i = 0; i < 1000; i++) {
 
         const event = queue.pop();
 
@@ -413,7 +436,8 @@ function simulateSingleFight(input: SimulationInput): SingleSimulationResult {
                     throw new Error("ugh.")
                 }
 
-                if (input.bloodlustOnCooldown && gameState.bloodlustCooldownComplete <= event.time) {
+                if (input.bloodlustStrategy === BloodlustStrategy.AT_FIGHT_START_AND_ON_CD
+                    && gameState.bloodlustCooldownComplete <= event.time) {
                     queue.push({
                         time: event.time,
                         type: EventType.BLOODLUST_START
@@ -422,10 +446,10 @@ function simulateSingleFight(input: SimulationInput): SingleSimulationResult {
                     break;
                 }
 
-                if (input.potionStrategy === PotionStrategy.HASTE && gameState.potionCooldownComplete <= event.time) {
+                if (input.potionStrategy === PotionStrategy.DESTRUCTION && gameState.potionCooldownComplete <= event.time) {
                     queue.push({
                         time: event.time,
-                        type: EventType.HASTE_POTION_START
+                        type: EventType.DESTRUCTION_POTION_START
                     })
                     queue.push(event);
                     break;
@@ -492,12 +516,17 @@ function simulateSingleFight(input: SimulationInput): SingleSimulationResult {
                     gameState.chainLightningCooldownComplete = event.time + 6000;
                 }
 
+                // Build a 'cast snapshot' which contains dmg, and whether it hit/crit.
+                // This mimic's 'snapshotting' behavior in the game.
+                const castSnapshot = buildCastSnapshot(event, input, gameState);
+
                 // Set up event for the spell 'arriving'
                 if (FLIGHT_TIME_SPELLS[event.ability]) {
                     const arrivalEvent: Event = {
                         time: event.time + input.flightTime,
                         type: EventType.ARRIVE,
-                        ability: event.ability
+                        ability: event.ability,
+                        castSnapshot: castSnapshot
                     };
                     logIfTrace(input, () => `This cast will arrive at ${arrivalEvent.time}`);
                     queue.push(arrivalEvent);
@@ -505,30 +534,16 @@ function simulateSingleFight(input: SimulationInput): SingleSimulationResult {
                     queue.push({
                         time: event.time,
                         type: EventType.ARRIVE,
-                        ability: event.ability
+                        ability: event.ability,
+                        castSnapshot: castSnapshot
                     });
                 }
 
                 // Set up events for next spell.
-
-                let nextAbility = AbilityType.LIGHTNING_BOLT;
-                if (event.time >= gameState.chainLightningCooldownComplete) {
-                    if (input.specInfo.rotation === Rotation.LB_SPAM_WITH_CL) {
-                        nextAbility = AbilityType.CHAIN_LIGHTNING;
-                    } else if (input.specInfo.rotation === Rotation.LB_SPAM_WITH_CL_UNLESS_TOO_MUCH_HASTE) {
-                        const castSpeedModifier = getCastSpeedModifier(input, gameState);
-                        if (castSpeedModifier < 1.5) {
-                            nextAbility = AbilityType.CHAIN_LIGHTNING;
-                        }
-                    }
+                const nextStartCastEvent = getNextCastEvent(event, input, gameState);
+                if (nextStartCastEvent !== undefined) {
+                    queue.push(nextStartCastEvent);
                 }
-                const nextStartCastEvent: Event = {
-                    time: event.time,
-                    type: EventType.START_CAST,
-                    ability: nextAbility,
-                };
-
-                queue.push(nextStartCastEvent);
 
                 // Case break.
                 break;
@@ -539,6 +554,10 @@ function simulateSingleFight(input: SimulationInput): SingleSimulationResult {
                     throw new Error("ugh.")
                 }
 
+                if (event.castSnapshot === undefined) {
+                    throw new Error("ARRIVE event must have a cast snapshot.");
+                }
+
                 logIfTrace(input, () => `[${event.time}] ${AbilityType[event.ability!]} arrived at boss. Gamestate is ${JSON.stringify(gameState)}`)
 
                 const lightningOverloadProc = Math.random() < 0.2;
@@ -547,58 +566,28 @@ function simulateSingleFight(input: SimulationInput): SingleSimulationResult {
                     const loAbility = LIGHTNING_OVERLOAD_MAP[event.ability];
                     if (loAbility !== undefined) {
                         logIfTrace(input, () => `Lightning Overload proc'd for ${AbilityType[event.ability!]}.`);
-                        const flightTime = FLIGHT_TIME_SPELLS[loAbility] ? input.flightTime : 0;
-                        const loArriveEvent: Event = {
-                            time: event.time + flightTime,
-                            type: EventType.ARRIVE,
+                        const lightningOverloadCast: Event = {
+                            time: event.time,
+                            type: EventType.END_CAST,
                             ability: loAbility,
                         };
-                        queue.push(loArriveEvent);
+                        queue.push(lightningOverloadCast);
                     }
                 }
 
-                // Roll hit
-                const hitPercent = 83 + Math.min((input.spellHitRating / SPELL_HIT_RATING_PER_PERCENT), 16);
-                const isHit = Math.random() < (hitPercent / 100);
+                const castSnapshot = event.castSnapshot;
 
-                logIfTrace(input, () => `The spell ${isHit ? 'hit' : 'missed'}. It had a ${hitPercent}% chance to hit.`);
-
-                if (!isHit) {
-                    break;
-                }
-
-                // Roll crit.
-                const spellCritPercent = input.spellCritRating / SPELL_CRIT_RATING_PER_PERCENT;
-                const isCrit = Math.random() < (spellCritPercent / 100);
-
-                logIfTrace(input, () => `The spell ${isCrit ? 'crit' : 'did not crit'}. It had a ${spellCritPercent}% chance to crit.`);
-
-                const critMultiplier = isCrit ? (input.metaGem === MetaGem.CHAOTIC_SKYFIRE_DIAMOND ? 2.09 : 2) : 1;
-
-                // TODO this could be called as some sort of registered 'handler'.
-                if (isCrit && (input.specInfo.talents[Talent.ELEMENTAL_FOCUS] === 1)) {
+                if (castSnapshot.isCrit && (input.specInfo.talents[Talent.ELEMENTAL_FOCUS] === 1)) {
                     gameState.elementalFocusStacks = 2;
                     logIfTrace(input, () => `Elemental focus stacks reset due to crit. Gamestate is ${JSON.stringify(gameState)}`);
                 }
 
-                // Figure out if we are dealing with a lightning overload spell.
-                const lightningOverloadMultiplier = IS_LO_SPELL[event.ability] ? 0.5 : 1;
-
-                // Roll damage
-                const baseDamage = BASE_DAMAGE_MAP[event.ability];
-                const damageRoll = Math.random() * (DAMAGE_RANGE_MAP[event.ability] + 1);
-                const rawBonusDamage = input.spellpower + ((input.totem === Totem.TOTEM_OF_THE_VOID) ? 55 : 0);
-                const coefficient = COEFFICIENT_MAP[event.ability] + (0.01 * input.specInfo.talents[Talent.CONCUSSION]);
-                const bonusDamage = coefficient * rawBonusDamage;
-                const damage = (baseDamage + damageRoll + bonusDamage) * critMultiplier * lightningOverloadMultiplier;
-                const flooredDamage = Math.floor(damage)
-
-                logIfTrace(input, () => `${flooredDamage} damage was done.`);
+                logIfTrace(input, () => `${castSnapshot.damage} damage was done.`);
 
                 const isFightOver = event.time > jitteredFightDuration;
 
                 if (!isFightOver) {
-                    totalDamageDone += flooredDamage;
+                    totalDamageDone += castSnapshot.damage;
                 } else {
                     logIfTrace(input, () => `The damage was not added to the total since the fight is over.`);
                 }
@@ -677,6 +666,29 @@ function simulateSingleFight(input: SimulationInput): SingleSimulationResult {
                 gameState.hastePotionActive = false;
                 break;
             }
+            case EventType.DESTRUCTION_POTION_START:
+            {
+                logIfTrace(input, () => `[${event.time}] Destruction Potion START`);
+
+                gameState.destructionPotionActive = true;
+
+                const endEvent: Event = {
+                    time: event.time + 15000,
+                    type: EventType.DESTRUCTION_POTION_END,
+                };
+
+                gameState.potionCooldownComplete = event.time + 120000;
+
+                queue.push(endEvent)
+
+                break;
+            }
+            case EventType.DESTRUCTION_POTION_END:
+            {
+                logIfTrace(input, () => `[${event.time}] Destruction Potion END`);
+                gameState.destructionPotionActive = false;
+                break;
+            }
         }
     }
 
@@ -714,4 +726,88 @@ function getCastSpeedModifier(input: SimulationInput, gameState: GameState): num
     const bloodlustModifier = gameState.bloodlustActive ? 1.3 : 1.0;
     const castSpeedModifier = hasteRatingModifier * bloodlustModifier;
     return castSpeedModifier;
+}
+
+function buildCastSnapshot(event: Event, input: SimulationInput, gameState: GameState): CastSnapshot {
+
+    if (event.ability === undefined) {
+        throw new Error("Event missing ability.");
+    }
+
+    // Roll hit
+    const hitPercent = 83 + Math.min((input.spellHitRating / SPELL_HIT_RATING_PER_PERCENT), 16);
+    const isHit = Math.random() < (hitPercent / 100);
+
+    logIfTrace(input, () => `The spell will ${isHit ? 'hit' : 'miss'}. It had a ${hitPercent}% chance to hit.`);
+
+    if (!isHit) {
+        return {
+            isHit: false,
+            isCrit: false,
+            damage: 0,
+        }
+    }
+
+    // Roll crit.
+    const spellCritPercent = (input.spellCritRating / SPELL_CRIT_RATING_PER_PERCENT)
+        + (gameState.destructionPotionActive ? 2 : 0);
+    const isCrit = Math.random() < (spellCritPercent / 100);
+
+    logIfTrace(input, () => `The spell will ${isCrit ? 'crit' : 'not crit'}. It had a ${spellCritPercent}% chance to crit.`);
+
+    const critMultiplier = isCrit ? (input.metaGem === MetaGem.CHAOTIC_SKYFIRE_DIAMOND ? 2.09 : 2) : 1;
+
+    // Figure out if we are dealing with a lightning overload spell.
+    const lightningOverloadMultiplier = IS_LO_SPELL[event.ability] ? 0.5 : 1;
+
+    // Roll damage
+    const baseDamage = BASE_DAMAGE_MAP[event.ability];
+    const damageRoll = Math.random() * (DAMAGE_RANGE_MAP[event.ability] + 1);
+    const rawBonusDamage = input.spellpower
+        + ((input.totem === Totem.TOTEM_OF_THE_VOID) ? 55 : 0)
+        + (gameState.destructionPotionActive ? 150 : 0);
+    const coefficient = COEFFICIENT_MAP[event.ability] * (1 + (0.01 * input.specInfo.talents[Talent.CONCUSSION]));
+    const bonusDamage = coefficient * rawBonusDamage;
+    const damage = (baseDamage + damageRoll + bonusDamage) * critMultiplier * lightningOverloadMultiplier;
+    const flooredDamage = Math.floor(damage);
+
+    return {
+        isHit: true,
+        isCrit: isCrit,
+        damage: flooredDamage
+    }
+}
+
+/**
+ * This code essentially implements the 'rotation'.
+ */
+function getNextCastEvent(currentEvent: Event, input: SimulationInput, gameState: GameState): Event | undefined {
+
+    // There is no next cast for a lightning overload ability.
+    if (currentEvent.ability === undefined
+        || currentEvent.ability === AbilityType.LO_CHAIN_LIGHTNING
+        || currentEvent.ability === AbilityType.LO_LIGHTNING_BOLT) {
+        return undefined;
+    }
+
+    let nextAbility = AbilityType.LIGHTNING_BOLT;
+
+    if (currentEvent.time >= gameState.chainLightningCooldownComplete) {
+        if (input.specInfo.rotation === Rotation.LB_SPAM_WITH_CL) {
+            nextAbility = AbilityType.CHAIN_LIGHTNING;
+        } else if (input.specInfo.rotation === Rotation.LB_SPAM_WITH_CL_UNLESS_TOO_MUCH_HASTE) {
+            const castSpeedModifier = getCastSpeedModifier(input, gameState);
+            if (castSpeedModifier < 1.5) {
+                nextAbility = AbilityType.CHAIN_LIGHTNING;
+            }
+        }
+    }
+
+    const nextStartCastEvent: Event = {
+        time: currentEvent.time,
+        type: EventType.START_CAST,
+        ability: nextAbility,
+    };
+
+    return nextStartCastEvent;
 }

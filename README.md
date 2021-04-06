@@ -1,3 +1,6 @@
-# how to make a build
+# how to make a prod build
 
-npm run build
+* delete build dir
+* `export NODE_OPTIONS=--max_old_space_size=4096`
+* `npm run build`
+* copy pasta into S3
